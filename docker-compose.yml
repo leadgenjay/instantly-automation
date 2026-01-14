@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  instantly-automation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: instantly-automation
+    ports:
+      - "3100:3100"
+    environment:
+      - NODE_ENV=production
+      - PORT=3100
+      - HEADLESS=true
+      - LOG_LEVEL=info
+      - API_KEY=${API_KEY}
+      - SCREENSHOTS_PATH=/app/screenshots
+    volumes:
+      # Persist screenshots for debugging
+      - ./screenshots:/app/screenshots
+      # Persist logs
+      - ./logs:/app/logs
+      # Shared memory for Chromium (prevents crashes)
+      - /dev/shm:/dev/shm
+    restart: unless-stopped
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    # Logging configuration
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Security options for Chromium
+    security_opt:
+      - seccomp:unconfined
+    # Network mode for internal access only
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
