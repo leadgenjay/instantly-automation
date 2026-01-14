@@ -14,6 +14,7 @@ export interface SetupInstantlyRequest {
 
   // Client info
   client_email: string; // Email to invite as admin
+  client_name?: string; // Full name (e.g., "John Doe") - used for signup form
 
   // Email credentials for verification
   imap_host: string;

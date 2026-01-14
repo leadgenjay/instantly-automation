@@ -4,15 +4,18 @@ FROM mcr.microsoft.com/playwright:v1.40.0-jammy
 # Set working directory
 WORKDIR /app
 
-# Install dependencies first (for better caching)
+# Install ALL dependencies (including devDependencies for build)
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci
 
 # Copy source code
 COPY . .
 
 # Build TypeScript
 RUN npm run build
+
+# Prune to production dependencies only
+RUN npm prune --production
 
 # Create directories for logs and screenshots
 RUN mkdir -p /app/logs /app/screenshots
