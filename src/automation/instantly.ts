@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs/promises";
 import { logger, createStepLogger } from "../utils/logger.js";
 import { generateSecurePassword } from "../utils/password.js";
+import { detectCaptcha, solveRecaptchaV2 } from "../utils/captcha-solver.js";
 import type {
   SetupInstantlyRequest,
   SetupInstantlyResponse,
@@ -243,6 +244,22 @@ async function createAccount(
 
   // Check terms checkbox
   await ctx.page.click('input[type="checkbox"]');
+
+  // Wait a moment for CAPTCHA to potentially appear
+  await ctx.page.waitForTimeout(2000);
+
+  // Check for and solve CAPTCHA if present
+  if (await detectCaptcha(ctx.page)) {
+    logger.info("CAPTCHA detected, solving...");
+    const captchaResult = await solveRecaptchaV2(
+      ctx.page,
+      ctx.page.url()
+    );
+    if (!captchaResult.success) {
+      throw new Error(`CAPTCHA solving failed: ${captchaResult.error}`);
+    }
+    logger.info("CAPTCHA solved successfully");
+  }
 
   // Click "Join Now" button
   await ctx.page.click('button:has-text("Join Now")');
