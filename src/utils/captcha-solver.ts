@@ -10,6 +10,11 @@ interface CaptchaResult {
   error?: string;
 }
 
+interface TwoCaptchaResponse {
+  status: number;
+  request: string;
+}
+
 /**
  * Solve reCAPTCHA v2 using 2Captcha service
  */
@@ -118,7 +123,7 @@ async function submitCaptcha(sitekey: string, pageUrl: string): Promise<string |
     });
 
     const response = await fetch(`${TWOCAPTCHA_API_URL}/in.php?${params}`);
-    const data = await response.json();
+    const data = await response.json() as TwoCaptchaResponse;
 
     if (data.status === 1) {
       return data.request;
@@ -152,7 +157,7 @@ async function pollForResult(taskId: string, timeout: number): Promise<string | 
       });
 
       const response = await fetch(`${TWOCAPTCHA_API_URL}/res.php?${params}`);
-      const data = await response.json();
+      const data = await response.json() as TwoCaptchaResponse;
 
       if (data.status === 1) {
         return data.request;
@@ -179,21 +184,24 @@ async function pollForResult(taskId: string, timeout: number): Promise<string | 
  */
 async function injectCaptchaToken(page: Page, token: string): Promise<void> {
   // Set the g-recaptcha-response textarea and trigger callback
-  await page.evaluate((token) => {
+  await page.evaluate((tokenValue: string) => {
     // Find all response textareas and fill them
     const textareas = document.querySelectorAll('textarea[name="g-recaptcha-response"], #g-recaptcha-response');
     textareas.forEach((ta) => {
-      (ta as HTMLTextAreaElement).value = token;
+      (ta as HTMLTextAreaElement).value = tokenValue;
     });
 
     // Find the callback function - try multiple approaches
-    let callback: ((token: string) => void) | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let callback: ((t: string) => void) | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const win = window as any;
 
     // Approach 1: Check common global callback names
     const globalCallbacks = ['onRecaptchaSuccess', 'recaptchaCallback', 'captchaCallback', 'onCaptchaSuccess'];
     for (const name of globalCallbacks) {
-      if (typeof (window as any)[name] === 'function') {
-        callback = (window as any)[name];
+      if (typeof win[name] === 'function') {
+        callback = win[name];
         break;
       }
     }
@@ -201,10 +209,12 @@ async function injectCaptchaToken(page: Page, token: string): Promise<void> {
     // Approach 2: Find callback from grecaptcha config
     if (!callback) {
       try {
-        const cfg = (window as any).___grecaptcha_cfg;
+        const cfg = win.___grecaptcha_cfg;
         if (cfg?.clients) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           for (const client of Object.values(cfg.clients) as any[]) {
             // Navigate through the nested structure to find callback
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const findCallback = (obj: any, depth = 0): any => {
               if (depth > 10 || !obj) return null;
               if (typeof obj === 'function') return obj;
@@ -231,8 +241,8 @@ async function injectCaptchaToken(page: Page, token: string): Promise<void> {
       const recaptchaDiv = document.querySelector('.g-recaptcha[data-callback], [data-callback]');
       if (recaptchaDiv) {
         const callbackName = recaptchaDiv.getAttribute('data-callback');
-        if (callbackName && typeof (window as any)[callbackName] === 'function') {
-          callback = (window as any)[callbackName];
+        if (callbackName && typeof win[callbackName] === 'function') {
+          callback = win[callbackName];
         }
       }
     }
@@ -240,13 +250,13 @@ async function injectCaptchaToken(page: Page, token: string): Promise<void> {
     // Execute the callback
     if (callback) {
       console.log('Executing reCAPTCHA callback');
-      callback(token);
+      callback(tokenValue);
     } else {
       console.log('No callback found, trying grecaptcha.execute');
       // Try to use grecaptcha API directly
-      if ((window as any).grecaptcha) {
+      if (win.grecaptcha) {
         try {
-          (window as any).grecaptcha.execute();
+          win.grecaptcha.execute();
         } catch (e) {
           console.log('grecaptcha.execute failed:', e);
         }
