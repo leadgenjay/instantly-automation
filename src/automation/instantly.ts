@@ -369,18 +369,105 @@ async function verifyEmailViaWebmail(
   try {
     // Navigate to webmail - use provided URL or construct default
     const targetUrl = webmailUrl || `${WEBMAIL_URL}/?_user=${encodeURIComponent(email)}`;
+    logger.info("Navigating to webmail", { url: targetUrl });
     await webmailPage.goto(targetUrl, { timeout: 60000 });
     await webmailPage.waitForLoadState("domcontentloaded");
 
-    // Enter password
-    await webmailPage.fill('input[type="password"], input[name="pass"]', password);
+    // Wait a moment for page to fully render
+    await webmailPage.waitForTimeout(2000);
 
-    // Click LOGIN
-    await webmailPage.click('button:has-text("Log in"), button:has-text("LOGIN"), input[type="submit"]');
+    // Try to find and fill password field (multiple selectors for cPanel/Roundcube/etc)
+    const passwordSelectors = [
+      'input[type="password"]',
+      'input[name="pass"]',
+      'input[name="password"]',
+      '#pass',
+      '#password'
+    ];
+
+    let passwordFilled = false;
+    for (const selector of passwordSelectors) {
+      try {
+        const passwordField = webmailPage.locator(selector).first();
+        if (await passwordField.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await passwordField.fill(password);
+          passwordFilled = true;
+          logger.info("Password field found and filled", { selector });
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (!passwordFilled) {
+      logger.warn("Could not find password field, may already be logged in");
+    }
+
+    // Click LOGIN button (try multiple selectors)
+    const loginSelectors = [
+      'button:has-text("Log in")',
+      'button:has-text("LOGIN")',
+      'button:has-text("Login")',
+      'input[type="submit"]',
+      '#login_submit',
+      'button[type="submit"]'
+    ];
+
+    for (const selector of loginSelectors) {
+      try {
+        const loginBtn = webmailPage.locator(selector).first();
+        if (await loginBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await loginBtn.click();
+          logger.info("Clicked login button", { selector });
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+
     await webmailPage.waitForLoadState("domcontentloaded");
+    await webmailPage.waitForTimeout(3000);
 
-    // Wait for inbox to load - try multiple selectors for different webmail interfaces
-    await webmailPage.waitForSelector('text="Inbox", .mailbox-list, #mailboxlist', { timeout: 30000 });
+    // cPanel may show a webmail app selection page, try clicking Roundcube
+    const roundcubeLink = webmailPage.locator('a:has-text("Roundcube"), [data-app="roundcube"], img[alt*="Roundcube"]').first();
+    if (await roundcubeLink.isVisible({ timeout: 3000 }).catch(() => false)) {
+      logger.info("cPanel webmail selector found, clicking Roundcube");
+      await roundcubeLink.click();
+      await webmailPage.waitForLoadState("domcontentloaded");
+      await webmailPage.waitForTimeout(3000);
+    }
+
+    // Wait for inbox to load - expanded selectors for different webmail interfaces
+    const inboxSelectors = [
+      'text="Inbox"',
+      'text="INBOX"',
+      '.mailbox-list',
+      '#mailboxlist',
+      '#mailboxlist-container',
+      '.folderlist',
+      'a:has-text("Inbox")',
+      '[data-folder="INBOX"]'
+    ];
+
+    let inboxFound = false;
+    for (const selector of inboxSelectors) {
+      try {
+        await webmailPage.waitForSelector(selector, { timeout: 5000 });
+        logger.info("Inbox found", { selector });
+        inboxFound = true;
+        break;
+      } catch {
+        continue;
+      }
+    }
+
+    if (!inboxFound) {
+      // Take a screenshot for debugging
+      await webmailPage.screenshot({ path: `/app/screenshots/webmail-debug.png` });
+      throw new Error("Could not find inbox - webmail may have different interface");
+    }
 
     // Poll for verification email (up to 2 minutes)
     const startTime = Date.now();
