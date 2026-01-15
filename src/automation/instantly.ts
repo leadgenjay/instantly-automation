@@ -120,7 +120,7 @@ export async function setupInstantlyAccount(
     // Step 4: Verify email via webmail
     currentStep = "verify_email";
     stepLogger.info("Verifying email via webmail");
-    await verifyEmailViaWebmail(ctx, instantly_email, request.imap_password);
+    await verifyEmailViaWebmail(ctx, instantly_email, request.imap_password, request.webmail_url);
 
     // Step 5: Skip tour and handle welcome popup
     currentStep = "skip_tour";
@@ -303,42 +303,44 @@ async function completeOnboardingSurvey(ctx: AutomationContext): Promise<void> {
 async function verifyEmailViaWebmail(
   ctx: AutomationContext,
   email: string,
-  password: string
+  password: string,
+  webmailUrl?: string
 ): Promise<void> {
   // Open new page for webmail
   const webmailPage = await ctx.context.newPage();
 
   try {
-    // Navigate to webmail with email pre-filled
-    await webmailPage.goto(`${WEBMAIL_URL}/?_user=${encodeURIComponent(email)}`);
+    // Navigate to webmail - use provided URL or construct default
+    const targetUrl = webmailUrl || `${WEBMAIL_URL}/?_user=${encodeURIComponent(email)}`;
+    await webmailPage.goto(targetUrl, { timeout: 60000 });
     await webmailPage.waitForLoadState("domcontentloaded");
 
     // Enter password
     await webmailPage.fill('input[type="password"], input[name="pass"]', password);
 
     // Click LOGIN
-    await webmailPage.click('button:has-text("LOGIN"), input[type="submit"]');
+    await webmailPage.click('button:has-text("Log in"), button:has-text("LOGIN"), input[type="submit"]');
     await webmailPage.waitForLoadState("domcontentloaded");
 
-    // Wait for inbox to load
-    await webmailPage.waitForSelector('text="Inbox"', { timeout: 30000 });
+    // Wait for inbox to load - try multiple selectors for different webmail interfaces
+    await webmailPage.waitForSelector('text="Inbox", .mailbox-list, #mailboxlist', { timeout: 30000 });
 
     // Poll for verification email (up to 2 minutes)
     const startTime = Date.now();
     let emailFound = false;
 
     while (Date.now() - startTime < EMAIL_POLL_TIMEOUT) {
-      // Click refresh button
-      await webmailPage.click('a:has-text("Refresh"), button:has-text("Refresh")').catch(() => {});
+      // Click refresh button (try multiple selectors)
+      await webmailPage.click('a:has-text("Refresh"), button:has-text("Refresh"), .refresh, [aria-label="Refresh"]').catch(() => {});
       await webmailPage.waitForTimeout(2000);
 
-      // Look for email from support@instantly.ai with "Welcome to Instantly"
-      const verificationEmail = webmailPage.locator('tr:has-text("support@instantly.ai"):has-text("Welcome to Instantly")');
+      // Look for email from Instantly - try multiple patterns
+      const verificationEmail = webmailPage.locator('tr:has-text("instantly"), tr:has-text("Instantly"), .message:has-text("instantly")').first();
 
       if (await verificationEmail.count() > 0) {
         emailFound = true;
         // Click on the email to open it
-        await verificationEmail.first().click();
+        await verificationEmail.click();
         await webmailPage.waitForLoadState("domcontentloaded");
         break;
       }
@@ -351,28 +353,44 @@ async function verifyEmailViaWebmail(
     }
 
     // Wait for email content to load
-    await webmailPage.waitForTimeout(2000);
+    await webmailPage.waitForTimeout(3000);
 
-    // Click "Click here to confirm your email" button
-    // This opens in a new tab, so we need to handle that
-    const [newPage] = await Promise.all([
-      ctx.context.waitForEvent("page"),
-      webmailPage.click('a:has-text("Click here to confirm your email")'),
-    ]);
+    // Find the verification link - could be button or link with various text
+    const verifyLink = webmailPage.locator('a:has-text("confirm"), a:has-text("Confirm"), a:has-text("Verify"), a:has-text("verify"), a[href*="verify"]').first();
 
-    // Wait for the new page (Instantly) to load
-    await newPage.waitForLoadState("domcontentloaded");
+    // Get the href to navigate directly (more reliable than clicking)
+    const verifyHref = await verifyLink.getAttribute('href');
 
-    // Close webmail page
-    await webmailPage.close();
+    if (verifyHref) {
+      // Close webmail and navigate in main context
+      await webmailPage.close();
 
-    // Switch context to the new Instantly page
-    ctx.page = newPage;
+      // Navigate to verification URL in the main page
+      await ctx.page.goto(verifyHref, { timeout: 60000 });
+      await ctx.page.waitForLoadState("domcontentloaded");
+    } else {
+      // Fallback: try clicking and handle both same-tab and new-tab
+      const pagePromise = ctx.context.waitForEvent("page", { timeout: 5000 }).catch(() => null);
+      await verifyLink.click();
+
+      const newPage = await pagePromise;
+
+      if (newPage) {
+        // Link opened new tab
+        await newPage.waitForLoadState("domcontentloaded");
+        await webmailPage.close();
+        ctx.page = newPage;
+      } else {
+        // Link opened in same tab - webmail page is now the Instantly page
+        await webmailPage.waitForLoadState("domcontentloaded");
+        ctx.page = webmailPage;
+      }
+    }
 
     // Wait for dashboard or welcome screen
-    await ctx.page.waitForURL("**/app/**", { timeout: 30000 });
+    await ctx.page.waitForURL("**/app.**", { timeout: 30000 });
   } catch (error) {
-    await webmailPage.close();
+    await webmailPage.close().catch(() => {});
     throw error;
   }
 }

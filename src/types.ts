@@ -21,6 +21,9 @@ export interface SetupInstantlyRequest {
   imap_user: string;
   imap_password: string;
 
+  // Webmail URL for email verification (optional)
+  webmail_url?: string;
+
   // Optional callback URL
   callback_url?: string;
 }
