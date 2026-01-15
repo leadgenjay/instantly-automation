@@ -268,21 +268,16 @@ async function createAccount(
 
 /**
  * Step 3: Complete onboarding survey
- * "Where did you find us?" -> Type "Lead Gen Jay"
+ * "Where did you find us?" -> Click "A Friend" (for Lead Gen Jay referral)
  * "What best describes your industry?" -> Select "Agency"
  * "Company Size" -> Select "1-10"
  */
 async function completeOnboardingSurvey(ctx: AutomationContext): Promise<void> {
   // Wait for onboarding page
-  await ctx.page.waitForSelector('text="Let\'s get to know you"', { timeout: 10000 });
+  await ctx.page.waitForSelector('text="Let\'s get to know you"', { timeout: 15000 });
 
-  // "Where did you find us?" - Find the text input and type "Lead Gen Jay"
-  // This is a custom text input in the button group
-  const findUsInput = ctx.page.locator('input[type="text"]').first();
-  await findUsInput.fill("Lead Gen Jay");
-
-  // Click somewhere else to register the input
-  await ctx.page.click('text="What best describes your industry?"');
+  // "Where did you find us?" - Click "A Friend" button (represents referral)
+  await ctx.page.click('button:has-text("A Friend")');
   await ctx.page.waitForTimeout(500);
 
   // Select "Agency" for industry
@@ -298,7 +293,7 @@ async function completeOnboardingSurvey(ctx: AutomationContext): Promise<void> {
   await ctx.page.waitForLoadState("domcontentloaded");
 
   // Should now see "Verify your email" page
-  await ctx.page.waitForSelector('text="Verify your email"', { timeout: 10000 });
+  await ctx.page.waitForSelector('text="Verify your email"', { timeout: 15000 });
 }
 
 /**
