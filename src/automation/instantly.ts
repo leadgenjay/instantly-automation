@@ -288,12 +288,37 @@ async function completeOnboardingSurvey(ctx: AutomationContext): Promise<void> {
   await ctx.page.locator('text="1-10"').first().click();
   await ctx.page.waitForTimeout(300);
 
+  // Check for CAPTCHA before clicking Continue
+  await ctx.page.waitForTimeout(1000);
+  if (await detectCaptcha(ctx.page)) {
+    logger.info("CAPTCHA detected on onboarding survey, solving...");
+    const captchaResult = await solveRecaptchaV2(ctx.page, ctx.page.url());
+    if (!captchaResult.success) {
+      throw new Error(`CAPTCHA solving failed: ${captchaResult.error}`);
+    }
+    logger.info("CAPTCHA solved successfully");
+  }
+
   // Click "Continue" button
   await ctx.page.locator('text="Continue"').click();
   await ctx.page.waitForLoadState("domcontentloaded");
 
+  // Wait a bit and check for another CAPTCHA
+  await ctx.page.waitForTimeout(2000);
+  if (await detectCaptcha(ctx.page)) {
+    logger.info("CAPTCHA detected after Continue, solving...");
+    const captchaResult = await solveRecaptchaV2(ctx.page, ctx.page.url());
+    if (!captchaResult.success) {
+      throw new Error(`CAPTCHA solving failed: ${captchaResult.error}`);
+    }
+    logger.info("CAPTCHA solved successfully");
+    // Click Continue again after solving
+    await ctx.page.locator('text="Continue"').click().catch(() => {});
+    await ctx.page.waitForLoadState("domcontentloaded");
+  }
+
   // Should now see "Verify your email" page
-  await ctx.page.waitForSelector('text="Verify your email"', { timeout: 15000 });
+  await ctx.page.waitForSelector('text="Verify your email"', { timeout: 30000 });
 }
 
 /**
