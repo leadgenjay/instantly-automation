@@ -251,6 +251,20 @@ async function createAccount(
   // Check for and solve CAPTCHA if present
   if (await detectCaptcha(ctx.page)) {
     logger.info("CAPTCHA detected, solving...");
+
+    // First, try clicking the reCAPTCHA checkbox iframe to trigger the challenge
+    try {
+      const recaptchaFrame = ctx.page.frameLocator('iframe[src*="recaptcha"][src*="anchor"]');
+      const checkbox = recaptchaFrame.locator('.recaptcha-checkbox-border, #recaptcha-anchor');
+      if (await checkbox.isVisible({ timeout: 2000 }).catch(() => false)) {
+        logger.info("Clicking reCAPTCHA checkbox to trigger challenge...");
+        await checkbox.click();
+        await ctx.page.waitForTimeout(3000); // Wait for challenge to appear
+      }
+    } catch (e) {
+      logger.info("No clickable reCAPTCHA checkbox found, proceeding with solving...");
+    }
+
     const captchaResult = await solveRecaptchaV2(
       ctx.page,
       ctx.page.url()
@@ -258,12 +272,30 @@ async function createAccount(
     if (!captchaResult.success) {
       throw new Error(`CAPTCHA solving failed: ${captchaResult.error}`);
     }
-    logger.info("CAPTCHA solved successfully");
+    logger.info("CAPTCHA solved, clicking Join Now button...");
   }
 
   // Click "Join Now" button
   await ctx.page.click('button:has-text("Join Now")');
-  await ctx.page.waitForLoadState("domcontentloaded");
+
+  // Wait for navigation or form submission
+  await Promise.race([
+    ctx.page.waitForLoadState("domcontentloaded"),
+    ctx.page.waitForTimeout(5000),
+  ]);
+
+  // Check if we need to solve CAPTCHA again (sometimes appears after clicking)
+  await ctx.page.waitForTimeout(2000);
+  if (await detectCaptcha(ctx.page)) {
+    logger.info("CAPTCHA appeared after form submission, solving again...");
+    const captchaResult = await solveRecaptchaV2(ctx.page, ctx.page.url());
+    if (!captchaResult.success) {
+      throw new Error(`CAPTCHA solving failed: ${captchaResult.error}`);
+    }
+    // Click Join Now again
+    await ctx.page.click('button:has-text("Join Now")').catch(() => {});
+    await ctx.page.waitForLoadState("domcontentloaded");
+  }
 }
 
 /**

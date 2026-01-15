@@ -178,31 +178,105 @@ async function pollForResult(taskId: string, timeout: number): Promise<string | 
  * Inject the solved CAPTCHA token into the page
  */
 async function injectCaptchaToken(page: Page, token: string): Promise<void> {
-  // Set the g-recaptcha-response textarea
+  // Set the g-recaptcha-response textarea and trigger callback
   await page.evaluate((token) => {
-    // Find and fill the response textarea
-    const textarea = document.querySelector('#g-recaptcha-response') as HTMLTextAreaElement;
-    if (textarea) {
-      textarea.value = token;
-      textarea.style.display = 'block'; // Make visible temporarily
-    }
-
-    // Also try to find any hidden textarea with recaptcha response
-    const hiddenTextareas = document.querySelectorAll('textarea[name="g-recaptcha-response"]');
-    hiddenTextareas.forEach((ta) => {
+    // Find all response textareas and fill them
+    const textareas = document.querySelectorAll('textarea[name="g-recaptcha-response"], #g-recaptcha-response');
+    textareas.forEach((ta) => {
       (ta as HTMLTextAreaElement).value = token;
     });
 
-    // Try to call the callback function if it exists
-    const recaptchaCallback = (window as any).onRecaptchaSuccess ||
-                              (window as any).recaptchaCallback ||
-                              (window as any).___grecaptcha_cfg?.clients?.[0]?.L?.L?.callback;
+    // Find the callback function - try multiple approaches
+    let callback: ((token: string) => void) | null = null;
 
-    if (typeof recaptchaCallback === 'function') {
-      recaptchaCallback(token);
+    // Approach 1: Check common global callback names
+    const globalCallbacks = ['onRecaptchaSuccess', 'recaptchaCallback', 'captchaCallback', 'onCaptchaSuccess'];
+    for (const name of globalCallbacks) {
+      if (typeof (window as any)[name] === 'function') {
+        callback = (window as any)[name];
+        break;
+      }
     }
+
+    // Approach 2: Find callback from grecaptcha config
+    if (!callback) {
+      try {
+        const cfg = (window as any).___grecaptcha_cfg;
+        if (cfg?.clients) {
+          for (const client of Object.values(cfg.clients) as any[]) {
+            // Navigate through the nested structure to find callback
+            const findCallback = (obj: any, depth = 0): any => {
+              if (depth > 10 || !obj) return null;
+              if (typeof obj === 'function') return obj;
+              if (typeof obj.callback === 'function') return obj.callback;
+              if (typeof obj === 'object') {
+                for (const key of Object.keys(obj)) {
+                  const result = findCallback(obj[key], depth + 1);
+                  if (result) return result;
+                }
+              }
+              return null;
+            };
+            callback = findCallback(client);
+            if (callback) break;
+          }
+        }
+      } catch (e) {
+        console.log('Error finding grecaptcha callback:', e);
+      }
+    }
+
+    // Approach 3: Find callback from data-callback attribute
+    if (!callback) {
+      const recaptchaDiv = document.querySelector('.g-recaptcha[data-callback], [data-callback]');
+      if (recaptchaDiv) {
+        const callbackName = recaptchaDiv.getAttribute('data-callback');
+        if (callbackName && typeof (window as any)[callbackName] === 'function') {
+          callback = (window as any)[callbackName];
+        }
+      }
+    }
+
+    // Execute the callback
+    if (callback) {
+      console.log('Executing reCAPTCHA callback');
+      callback(token);
+    } else {
+      console.log('No callback found, trying grecaptcha.execute');
+      // Try to use grecaptcha API directly
+      if ((window as any).grecaptcha) {
+        try {
+          (window as any).grecaptcha.execute();
+        } catch (e) {
+          console.log('grecaptcha.execute failed:', e);
+        }
+      }
+    }
+
   }, token);
 
-  // Wait a moment for the token to be processed
-  await page.waitForTimeout(1000);
+  // Wait for the CAPTCHA challenge iframe to disappear (indicates success)
+  logger.info("Waiting for CAPTCHA overlay to dismiss...");
+
+  try {
+    // Wait for either the challenge iframe to disappear or become hidden
+    await Promise.race([
+      page.waitForSelector('iframe[title*="recaptcha challenge"]', { state: 'hidden', timeout: 10000 }).catch(() => null),
+      page.waitForSelector('iframe[src*="bframe"]', { state: 'hidden', timeout: 10000 }).catch(() => null),
+      page.waitForTimeout(3000), // Fallback: just wait 3 seconds
+    ]);
+
+    // Additional wait for any animations
+    await page.waitForTimeout(1000);
+
+    // Check if CAPTCHA is still visible
+    const stillVisible = await page.$('iframe[title*="recaptcha challenge"]:visible, iframe[src*="bframe"]:visible');
+    if (stillVisible) {
+      logger.warn("CAPTCHA overlay may still be visible after token injection");
+    } else {
+      logger.info("CAPTCHA overlay dismissed successfully");
+    }
+  } catch (error) {
+    logger.warn("Could not verify CAPTCHA dismissal", { error });
+  }
 }
