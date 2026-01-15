@@ -15,7 +15,7 @@ const INSTANTLY_APP_URL = "https://app.instantly.ai";
 const WEBMAIL_URL = "https://lgjconnect.com:2096";
 
 // Timeout settings
-const NAVIGATION_TIMEOUT = 30000;
+const NAVIGATION_TIMEOUT = 60000;
 const ACTION_TIMEOUT = 10000;
 const EMAIL_POLL_TIMEOUT = 120000; // 2 minutes for email to arrive
 const EMAIL_POLL_INTERVAL = 5000; // Check every 5 seconds
@@ -204,15 +204,17 @@ export async function setupInstantlyAccount(
  * Step 1: Navigate to Instantly with affiliate link
  */
 async function navigateToInstantly(ctx: AutomationContext): Promise<void> {
-  await ctx.page.goto(INSTANTLY_URL);
-  await ctx.page.waitForLoadState("networkidle");
+  await ctx.page.goto(INSTANTLY_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+
+  // Wait for the page to be interactive
+  await ctx.page.waitForTimeout(3000);
 
   // Click "START FOR FREE" button
   await ctx.page.click('button:has-text("START FOR FREE"), a:has-text("START FOR FREE")');
-  await ctx.page.waitForLoadState("networkidle");
+  await ctx.page.waitForLoadState("domcontentloaded");
 
   // Should now be on app.instantly.ai/auth/signup
-  await ctx.page.waitForURL("**/auth/signup**", { timeout: 10000 });
+  await ctx.page.waitForURL("**/auth/signup**", { timeout: 30000 });
 }
 
 /**
@@ -244,7 +246,7 @@ async function createAccount(
 
   // Click "Join Now" button
   await ctx.page.click('button:has-text("Join Now")');
-  await ctx.page.waitForLoadState("networkidle");
+  await ctx.page.waitForLoadState("domcontentloaded");
 }
 
 /**
@@ -276,7 +278,7 @@ async function completeOnboardingSurvey(ctx: AutomationContext): Promise<void> {
 
   // Click "Continue"
   await ctx.page.click('button:has-text("Continue")');
-  await ctx.page.waitForLoadState("networkidle");
+  await ctx.page.waitForLoadState("domcontentloaded");
 
   // Should now see "Verify your email" page
   await ctx.page.waitForSelector('text="Verify your email"', { timeout: 10000 });
@@ -297,14 +299,14 @@ async function verifyEmailViaWebmail(
   try {
     // Navigate to webmail with email pre-filled
     await webmailPage.goto(`${WEBMAIL_URL}/?_user=${encodeURIComponent(email)}`);
-    await webmailPage.waitForLoadState("networkidle");
+    await webmailPage.waitForLoadState("domcontentloaded");
 
     // Enter password
     await webmailPage.fill('input[type="password"], input[name="pass"]', password);
 
     // Click LOGIN
     await webmailPage.click('button:has-text("LOGIN"), input[type="submit"]');
-    await webmailPage.waitForLoadState("networkidle");
+    await webmailPage.waitForLoadState("domcontentloaded");
 
     // Wait for inbox to load
     await webmailPage.waitForSelector('text="Inbox"', { timeout: 30000 });
@@ -325,7 +327,7 @@ async function verifyEmailViaWebmail(
         emailFound = true;
         // Click on the email to open it
         await verificationEmail.first().click();
-        await webmailPage.waitForLoadState("networkidle");
+        await webmailPage.waitForLoadState("domcontentloaded");
         break;
       }
 
@@ -347,7 +349,7 @@ async function verifyEmailViaWebmail(
     ]);
 
     // Wait for the new page (Instantly) to load
-    await newPage.waitForLoadState("networkidle");
+    await newPage.waitForLoadState("domcontentloaded");
 
     // Close webmail page
     await webmailPage.close();
@@ -392,7 +394,7 @@ async function skipTourAndWelcome(ctx: AutomationContext): Promise<void> {
     }
   }
 
-  await ctx.page.waitForLoadState("networkidle");
+  await ctx.page.waitForLoadState("domcontentloaded");
 }
 
 /**
@@ -409,7 +411,7 @@ async function upgradeToPaidPlan(ctx: AutomationContext): Promise<void> {
 
   // Click "Settings" in the menu
   await ctx.page.click('text="Settings"');
-  await ctx.page.waitForLoadState("networkidle");
+  await ctx.page.waitForLoadState("domcontentloaded");
 
   // Should be on Settings page, Billing & Usage tab
   // Make sure we're on Email Outreach plans
@@ -428,7 +430,7 @@ async function upgradeToPaidPlan(ctx: AutomationContext): Promise<void> {
 
   // Wait for Stripe checkout page to load
   await ctx.page.waitForURL("**/checkout.stripe.com/**", { timeout: 30000 });
-  await ctx.page.waitForLoadState("networkidle");
+  await ctx.page.waitForLoadState("domcontentloaded");
 }
 
 /**
@@ -490,7 +492,7 @@ async function completeStripePayment(
 
   // Wait for redirect back to Instantly
   await ctx.page.waitForURL("**/app.instantly.ai/**", { timeout: 60000 });
-  await ctx.page.waitForLoadState("networkidle");
+  await ctx.page.waitForLoadState("domcontentloaded");
 }
 
 /**
@@ -506,7 +508,7 @@ async function handlePostPayment(ctx: AutomationContext): Promise<void> {
     await ctx.page.waitForTimeout(500);
   }
 
-  await ctx.page.waitForLoadState("networkidle");
+  await ctx.page.waitForLoadState("domcontentloaded");
 }
 
 /**
@@ -516,7 +518,7 @@ async function handlePostPayment(ctx: AutomationContext): Promise<void> {
 async function createApiKey(ctx: AutomationContext): Promise<string> {
   // Navigate to Settings → Integrations tab
   await ctx.page.goto(`${INSTANTLY_APP_URL}/app/settings/integrations`);
-  await ctx.page.waitForLoadState("networkidle");
+  await ctx.page.waitForLoadState("domcontentloaded");
 
   // Click "API Keys" in left sidebar
   await ctx.page.click('text="API Keys"');
@@ -586,7 +588,7 @@ async function inviteClientAsAdmin(
 ): Promise<void> {
   // Click "Account & Settings" tab
   await ctx.page.click('text="Account & Settings"');
-  await ctx.page.waitForLoadState("networkidle");
+  await ctx.page.waitForLoadState("domcontentloaded");
 
   // Click "Workspace & members" in left sidebar
   await ctx.page.click('text="Workspace & members"');
