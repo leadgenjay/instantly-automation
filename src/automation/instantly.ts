@@ -276,20 +276,20 @@ async function completeOnboardingSurvey(ctx: AutomationContext): Promise<void> {
   // Wait for onboarding page
   await ctx.page.waitForSelector('text="Let\'s get to know you"', { timeout: 15000 });
 
-  // "Where did you find us?" - Click "A Friend" button (represents referral)
-  await ctx.page.click('button:has-text("A Friend")');
+  // "Where did you find us?" - Click "A Friend" (could be button, div, or span)
+  await ctx.page.locator('text="A Friend"').first().click();
   await ctx.page.waitForTimeout(500);
 
   // Select "Agency" for industry
-  await ctx.page.click('button:has-text("Agency")');
+  await ctx.page.locator('text="Agency"').first().click();
   await ctx.page.waitForTimeout(300);
 
   // Select "1-10" for company size
-  await ctx.page.click('button:has-text("1-10")');
+  await ctx.page.locator('text="1-10"').first().click();
   await ctx.page.waitForTimeout(300);
 
-  // Click "Continue"
-  await ctx.page.click('button:has-text("Continue")');
+  // Click "Continue" button
+  await ctx.page.locator('text="Continue"').click();
   await ctx.page.waitForLoadState("domcontentloaded");
 
   // Should now see "Verify your email" page
