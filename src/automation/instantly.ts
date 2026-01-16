@@ -628,32 +628,84 @@ async function verifyEmailViaWebmail(
  * Step 5: Skip tour and handle welcome popup
  */
 async function skipTourAndWelcome(ctx: AutomationContext): Promise<void> {
+  logger.info("Dismissing tour and popups...");
+
+  // Handle Joyride tour (react-joyride library)
+  // Try multiple approaches to dismiss it
+  const joyrideSkipSelectors = [
+    'button[data-action="skip"]',
+    '[data-test-id="button-skip"]',
+    'button:has-text("Skip")',
+    'button:has-text("Skip tour")',
+    'button:has-text("Skip Tour")',
+    '.react-joyride__tooltip button:has-text("Skip")',
+    '[aria-label="Skip"]'
+  ];
+
+  for (const selector of joyrideSkipSelectors) {
+    try {
+      const skipBtn = ctx.page.locator(selector).first();
+      if (await skipBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await skipBtn.click();
+        logger.info("Clicked Joyride skip button", { selector });
+        await ctx.page.waitForTimeout(500);
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  // If Joyride overlay is still present, try to force close it with JavaScript
+  const joyrideOverlay = ctx.page.locator('.react-joyride__overlay, [data-test-id="overlay"]');
+  if (await joyrideOverlay.isVisible({ timeout: 1000 }).catch(() => false)) {
+    logger.info("Joyride overlay still present, attempting to remove via JavaScript");
+    await ctx.page.evaluate(() => {
+      // Remove Joyride portal and overlay
+      const portal = document.getElementById('react-joyride-portal');
+      if (portal) portal.remove();
+      const overlays = document.querySelectorAll('.react-joyride__overlay, [data-test-id="overlay"]');
+      overlays.forEach(el => el.remove());
+    });
+    await ctx.page.waitForTimeout(500);
+  }
+
   // Handle "Welcome back" popup if present
   const welcomePopupClose = ctx.page.locator('button:has-text("×"), [aria-label="Close"]').first();
-  if (await welcomePopupClose.isVisible().catch(() => false)) {
+  if (await welcomePopupClose.isVisible({ timeout: 1000 }).catch(() => false)) {
     await welcomePopupClose.click();
     await ctx.page.waitForTimeout(500);
   }
 
-  // Skip tour if present
+  // Skip tour if present (alternative format)
   const skipTourLink = ctx.page.locator('text="Skip Tour"');
-  if (await skipTourLink.isVisible().catch(() => false)) {
+  if (await skipTourLink.isVisible({ timeout: 1000 }).catch(() => false)) {
     await skipTourLink.click();
     await ctx.page.waitForTimeout(500);
   }
 
   // Close any other modals
   const closeButtons = ctx.page.locator('button:has-text("×"), button:has-text("Close"), [aria-label="Close"]');
-  for (let i = 0; i < await closeButtons.count(); i++) {
+  const closeCount = await closeButtons.count();
+  for (let i = 0; i < closeCount; i++) {
     try {
-      await closeButtons.nth(i).click();
-      await ctx.page.waitForTimeout(300);
+      if (await closeButtons.nth(i).isVisible().catch(() => false)) {
+        await closeButtons.nth(i).click();
+        await ctx.page.waitForTimeout(300);
+      }
     } catch {
       // Ignore if button not clickable
     }
   }
 
+  // Final check - if any overlay is still blocking, force remove
+  await ctx.page.evaluate(() => {
+    const overlays = document.querySelectorAll('[role="presentation"][class*="overlay"]');
+    overlays.forEach(el => el.remove());
+  });
+
   await ctx.page.waitForLoadState("domcontentloaded");
+  logger.info("Tour/popups dismissed");
 }
 
 /**
