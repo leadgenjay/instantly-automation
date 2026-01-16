@@ -474,62 +474,147 @@ async function verifyEmailViaWebmail(
     let emailFound = false;
 
     while (Date.now() - startTime < EMAIL_POLL_TIMEOUT) {
-      // Click refresh button (try multiple selectors)
-      await webmailPage.click('a:has-text("Refresh"), button:has-text("Refresh"), .refresh, [aria-label="Refresh"]').catch(() => {});
+      // Click refresh button (try multiple selectors for Roundcube)
+      await webmailPage.click('a.button.refresh, a:has-text("Refresh"), button:has-text("Refresh"), .refresh, [aria-label="Refresh"], .toolbar a[title*="Refresh"]').catch(() => {});
       await webmailPage.waitForTimeout(2000);
 
-      // Look for email from Instantly - try multiple patterns
-      const verificationEmail = webmailPage.locator('tr:has-text("instantly"), tr:has-text("Instantly"), .message:has-text("instantly")').first();
+      // Look for email from Instantly - try multiple patterns including subject line
+      const emailSelectors = [
+        'tr:has-text("instantly")',
+        'tr:has-text("Instantly")',
+        'tr:has-text("Verify your email")',
+        'tr:has-text("verify")',
+        '.message:has-text("instantly")',
+        '.messagelist tr:has-text("instantly")',
+        '#messagelist tr:has-text("instantly")'
+      ];
 
-      if (await verificationEmail.count() > 0) {
+      let verificationEmail = null;
+      for (const selector of emailSelectors) {
+        const email = webmailPage.locator(selector).first();
+        if (await email.count() > 0) {
+          verificationEmail = email;
+          logger.info("Found verification email", { selector });
+          break;
+        }
+      }
+
+      if (verificationEmail) {
         emailFound = true;
         // Click on the email to open it
         await verificationEmail.click();
         await webmailPage.waitForLoadState("domcontentloaded");
+        await webmailPage.waitForTimeout(2000);
         break;
       }
 
+      logger.info("Waiting for verification email...");
       await webmailPage.waitForTimeout(EMAIL_POLL_INTERVAL);
     }
 
     if (!emailFound) {
+      await webmailPage.screenshot({ path: `/app/screenshots/webmail-no-email.png` });
       throw new Error("Verification email not received within timeout");
     }
 
     // Wait for email content to load
     await webmailPage.waitForTimeout(3000);
 
-    // Find the verification link - could be button or link with various text
-    const verifyLink = webmailPage.locator('a:has-text("confirm"), a:has-text("Confirm"), a:has-text("Verify"), a:has-text("verify"), a[href*="verify"]').first();
+    // Take screenshot of email content for debugging
+    await webmailPage.screenshot({ path: `/app/screenshots/webmail-email-content.png` });
+    logger.info("Email content screenshot taken");
 
-    // Get the href to navigate directly (more reliable than clicking)
-    const verifyHref = await verifyLink.getAttribute('href');
+    // Roundcube displays email content in an iframe - try to access it
+    let verifyHref: string | null = null;
 
-    if (verifyHref) {
-      // Close webmail and navigate in main context
-      await webmailPage.close();
+    // First, try to find the link in the main page
+    const linkSelectors = [
+      'a:has-text("confirm")',
+      'a:has-text("Confirm")',
+      'a:has-text("Verify")',
+      'a:has-text("verify")',
+      'a:has-text("Click here")',
+      'a:has-text("click here")',
+      'a[href*="verify"]',
+      'a[href*="confirm"]',
+      'a[href*="instantly"]'
+    ];
 
-      // Navigate to verification URL in the main page
-      await ctx.page.goto(verifyHref, { timeout: 60000 });
-      await ctx.page.waitForLoadState("domcontentloaded");
-    } else {
-      // Fallback: try clicking and handle both same-tab and new-tab
-      const pagePromise = ctx.context.waitForEvent("page", { timeout: 5000 }).catch(() => null);
-      await verifyLink.click();
-
-      const newPage = await pagePromise;
-
-      if (newPage) {
-        // Link opened new tab
-        await newPage.waitForLoadState("domcontentloaded");
-        await webmailPage.close();
-        ctx.page = newPage;
-      } else {
-        // Link opened in same tab - webmail page is now the Instantly page
-        await webmailPage.waitForLoadState("domcontentloaded");
-        ctx.page = webmailPage;
+    for (const selector of linkSelectors) {
+      try {
+        const link = webmailPage.locator(selector).first();
+        if (await link.isVisible({ timeout: 1000 }).catch(() => false)) {
+          verifyHref = await link.getAttribute('href');
+          if (verifyHref) {
+            logger.info("Found verify link in main page", { selector, href: verifyHref });
+            break;
+          }
+        }
+      } catch {
+        continue;
       }
     }
+
+    // If not found, try inside iframe (Roundcube uses iframe for email body)
+    if (!verifyHref) {
+      logger.info("Trying to find link in iframe...");
+      const iframeSelectors = ['iframe#messagecontframe', 'iframe[name="messagecontframe"]', 'iframe.mailview', 'iframe'];
+
+      for (const iframeSelector of iframeSelectors) {
+        try {
+          const frame = webmailPage.frameLocator(iframeSelector);
+          for (const linkSelector of linkSelectors) {
+            try {
+              const link = frame.locator(linkSelector).first();
+              if (await link.isVisible({ timeout: 1000 }).catch(() => false)) {
+                verifyHref = await link.getAttribute('href');
+                if (verifyHref) {
+                  logger.info("Found verify link in iframe", { iframeSelector, linkSelector, href: verifyHref });
+                  break;
+                }
+              }
+            } catch {
+              continue;
+            }
+          }
+          if (verifyHref) break;
+        } catch {
+          continue;
+        }
+      }
+    }
+
+    // Last resort: get all links from iframe and find one with verify/confirm
+    if (!verifyHref) {
+      logger.info("Trying to find any verification link in iframe...");
+      try {
+        const frame = webmailPage.frameLocator('iframe#messagecontframe, iframe').first();
+        const allLinks = await frame.locator('a[href]').all();
+        for (const link of allLinks) {
+          const href = await link.getAttribute('href');
+          if (href && (href.includes('verify') || href.includes('confirm') || href.includes('instantly'))) {
+            verifyHref = href;
+            logger.info("Found verification link by href pattern", { href });
+            break;
+          }
+        }
+      } catch (e) {
+        logger.warn("Could not search iframe for links", { error: String(e) });
+      }
+    }
+
+    if (!verifyHref) {
+      await webmailPage.screenshot({ path: `/app/screenshots/webmail-no-link.png` });
+      throw new Error("Could not find verification link in email");
+    }
+
+    // Close webmail and navigate in main context
+    logger.info("Navigating to verification URL", { href: verifyHref });
+    await webmailPage.close();
+
+    // Navigate to verification URL in the main page
+    await ctx.page.goto(verifyHref, { timeout: 60000 });
+    await ctx.page.waitForLoadState("domcontentloaded");
 
     // Wait for dashboard or welcome screen
     await ctx.page.waitForURL("**/app.**", { timeout: 30000 });
